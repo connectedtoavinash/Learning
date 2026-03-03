@@ -1,0 +1,25 @@
+spring:
+  redis:
+    # ===== CLUSTER =====
+    cluster:
+      nodes:
+        - 127.0.0.1:7000
+        - 127.0.0.1:7001
+        - 127.0.0.1:7002
+      max-redirects: 3
+    password: ""            # set if ACL is enabled
+
+    # ===== STANDALONE (switch configs if needed) =====
+    # host: localhost
+    # port: 6379
+
+app:
+  stream:
+    name: classroom-events
+    group-prefix: "local-group-"
+
+# Suppress Lettuce's internal "Maintenance events" at the logging level too
+logging:
+  level:
+    io.lettuce.core.protocol: WARN
+    io.lettuce.core.RedisHandshake: ERROR   # <-- kills the spam entirely
