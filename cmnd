@@ -1,0 +1,1 @@
+XADD your_stream_name * payload "{\"eventType\":\"CLASS_START\",\"senderId\":\"0f1a227c-4cba-430d-b438-44b111f45b21\",\"studentIds\":[\"ba77b670-1f2d-4d24-b4a5-4ebedd22d09\",\"abecab6f-b4ad-4fb3-afa5-0a460f47c781\"],\"classId\":\"ee78ccf3-5884-4213-9c9d-6d2e9c025ca2\",\"participationCode\":\"735999\"}"
