@@ -1,0 +1,79 @@
+import okhttp3.*;
+import org.junit.jupiter.api.*;
+
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+public class LiveKitWebSocketTest {
+
+    private static final int TIMEOUT_SECONDS = 10;
+    private OkHttpClient client;
+
+    // 👇 Yahan apna live URL aur token daalein
+    private final String livekitUrl = "wss://your-live-url.livekit.cloud";
+    private final String token = "eyJhbGciOi...your-token-here";
+
+    @BeforeEach
+    void setUp() {
+        client = new OkHttpClient.Builder()
+                .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .build();
+    }
+
+    @AfterEach
+    void tearDown() {
+        client.dispatcher().executorService().shutdown();
+    }
+
+    @Test
+    @DisplayName("Verify live WebSocket connection with given URL and token")
+    void verifyWebSocketConnection() throws InterruptedException {
+
+        String fullUrl = livekitUrl + "/rtc?access_token=" + token + "&auto_subscribe=1&protocol=9";
+
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicBoolean connected = new AtomicBoolean(false);
+        AtomicReference<Integer> statusCode = new AtomicReference<>();
+        AtomicReference<String> error = new AtomicReference<>("");
+
+        Request request = new Request.Builder().url(fullUrl).build();
+
+        WebSocket webSocket = client.newWebSocket(request, new WebSocketListener() {
+
+            @Override
+            public void onOpen(WebSocket ws, Response response) {
+                statusCode.set(response.code());
+                connected.set(true);
+                System.out.println("✅ Connection successful | Status: " + response.code());
+                latch.countDown();
+            }
+
+            @Override
+            public void onFailure(WebSocket ws, Throwable t, Response response) {
+                String msg = t.getMessage();
+                if (response != null) {
+                    msg += " | HTTP " + response.code();
+                    statusCode.set(response.code());
+                }
+                error.set(msg);
+                System.out.println("❌ Connection failed: " + msg);
+                latch.countDown();
+            }
+        });
+
+        boolean completed = latch.await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        webSocket.close(1000, "Test done");
+
+        // Assertions
+        assertTrue(completed, "Connection timed out");
+        assertTrue(connected.get(), "WebSocket connection failed: " + error.get());
+        assertEquals(101, statusCode.get(), "Expected 101 Switching Protocols");
+
+        System.out.println("✅ WebSocket verified successfully on: " + livekitUrl);
+    }
+}
