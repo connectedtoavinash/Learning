@@ -1,0 +1,116 @@
+import okhttp3.*;
+import okio.ByteString;
+import org.junit.jupiter.api.*;
+
+import java.util.Base64;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+public class LiveKitMeetingLiveTest {
+
+    // 👇 Bas yeh 2 cheezein daalein
+    private final String livekitUrl = "wss://your-url.livekit.cloud";
+    private final String token = "eyJhbGciOi...your-token";
+
+    private static final int TIMEOUT = 15;
+    private OkHttpClient client;
+
+    @BeforeEach
+    void setUp() {
+        client = new OkHttpClient.Builder()
+                .connectTimeout(TIMEOUT, TimeUnit.SECONDS)
+                .readTimeout(TIMEOUT, TimeUnit.SECONDS)
+                .build();
+    }
+
+    @AfterEach
+    void tearDown() {
+        client.dispatcher().executorService().shutdown();
+    }
+
+    @Test
+    @DisplayName("Verify meeting is LIVE using URL and Token")
+    void verifyMeetingIsLive() throws InterruptedException {
+
+        // Step 1: Token se room info decode karo
+        printTokenInfo(token);
+
+        // Step 2: Connect and verify meeting is live
+        String fullUrl = livekitUrl + "/rtc?access_token=" + token
+                + "&auto_subscribe=1&protocol=9";
+
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicBoolean connected = new AtomicBoolean(false);
+        AtomicBoolean meetingLive = new AtomicBoolean(false);
+        AtomicReference<String> error = new AtomicReference<>("");
+
+        WebSocket ws = client.newWebSocket(
+                new Request.Builder().url(fullUrl).build(),
+                new WebSocketListener() {
+
+                    @Override
+                    public void onOpen(WebSocket ws, Response response) {
+                        System.out.println("✅ Connected to server | HTTP " + response.code());
+                        connected.set(true);
+                    }
+
+                    @Override
+                    public void onMessage(WebSocket ws, ByteString bytes) {
+                        // Join Response aaya = Meeting LIVE hai ✅
+                        System.out.println("✅ Join Response received: " + bytes.size() + " bytes");
+                        meetingLive.set(true);
+                        latch.countDown();
+                    }
+
+                    @Override
+                    public void onMessage(WebSocket ws, String text) {
+                        System.out.println("✅ Response received: " + text);
+                        meetingLive.set(true);
+                        latch.countDown();
+                    }
+
+                    @Override
+                    public void onFailure(WebSocket ws, Throwable t, Response res) {
+                        String msg = t.getMessage();
+                        if (res != null) msg += " | HTTP " + res.code();
+                        error.set(msg);
+                        latch.countDown();
+                    }
+
+                    @Override
+                    public void onClosing(WebSocket ws, int code, String reason) {
+                        error.set("Server closed: " + code + " " + reason);
+                        latch.countDown();
+                    }
+                });
+
+        boolean done = latch.await(TIMEOUT, TimeUnit.SECONDS);
+        ws.close(1000, "Test done");
+
+        // Step 3: Assertions
+        assertTrue(done, "⏱ Timeout — server ne respond nahi kiya");
+        assertTrue(connected.get(), "❌ Connection failed: " + error.get());
+        assertTrue(meetingLive.get(), "❌ Meeting is NOT live: " + error.get());
+
+        System.out.println("\n🎉 MEETING IS LIVE! ✅");
+    }
+
+    /**
+     * JWT Token decode karke room info print karta hai
+     */
+    private void printTokenInfo(String token) {
+        try {
+            String[] parts = token.split("\\.");
+            String payload = new String(Base64.getUrlDecoder().decode(parts[1]));
+            System.out.println("🔑 Token Info:");
+            System.out.println("   " + payload);
+            System.out.println();
+        } catch (Exception e) {
+            System.out.println("⚠️ Token decode failed: " + e.getMessage());
+        }
+    }
+}
