@@ -1,0 +1,95 @@
+// utils/livekitHelper.js
+import WebSocket from 'ws';
+
+export function verifyRoomIsLive(url, token, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    // LiveKit signaling endpoint
+    const wsUrl = `${url}/rtc?access_token=${token}&auto_subscribe=true&protocol=9`;
+
+    const ws = new WebSocket(wsUrl);
+    let isResolved = false;
+
+    const timer = setTimeout(() => {
+      if (!isResolved) {
+        isResolved = true;
+        ws.close();
+        reject(new Error("Timeout: Room is not live or unreachable"));
+      }
+    }, timeoutMs);
+
+    ws.on('open', () => {
+      console.log("✅ WebSocket connection opened - Room is reachable");
+    });
+
+    ws.on('message', (data) => {
+      if (!isResolved) {
+        isResolved = true;
+        clearTimeout(timer);
+        console.log("✅ Received response from LiveKit - Room is LIVE");
+        ws.close(1000);
+        resolve({
+          isLive: true,
+          message: "Room is live and accepting connections",
+        });
+      }
+    });
+
+    ws.on('error', (err) => {
+      if (!isResolved) {
+        isResolved = true;
+        clearTimeout(timer);
+        reject(new Error(`Room is NOT live: ${err.message}`));
+      }
+    });
+
+    ws.on('close', (code, reason) => {
+      clearTimeout(timer);
+      if (!isResolved) {
+        isResolved = true;
+        if (code === 1000) {
+          resolve({ isLive: true, message: "Room connection verified" });
+        } else {
+          reject(
+            new Error(`Room closed unexpectedly - Code: ${code}, Reason: ${reason}`)
+          );
+        }
+      }
+    });
+  });
+}
+
+
+_______
+-------
+
+import { test, expect } from "../../fixtures/apiFixtures";
+import { verifyRoomIsLive } from "../../utils/livekitHelper";
+
+test.describe("Full Classroom Story", () => {
+  test("should create, manage, and delete a classroom in a full story", async ({
+    teacher,
+  }) => {
+    // ... Steps 1-4 remain the same ...
+
+    // 5. Start the classroom
+    const startClassroomResponse = await teacher.classroom.startClassroom({
+      classroomId,
+      60,
+    });
+
+    if (startClassroomResponse.token) {
+      expect(startClassroomResponse).toHaveProperty("token");
+      expect(startClassroomResponse).toHaveProperty("url");
+
+      // 5.1 ✅ Verify the LiveKit room is LIVE
+      const roomStatus = await verifyRoomIsLive(
+        startClassroomResponse.url,
+        startClassroomResponse.token
+      );
+      expect(roomStatus.isLive).toBe(true);
+      console.log(`Room Status: ${roomStatus.message}`);
+    }
+
+    // 6. Get active students and verify ...
+  });
+});
