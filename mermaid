@@ -1,0 +1,379 @@
+# Mermaid Diagrams
+
+## 1. System Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph Clients["☁️ Clients (Browsers/Devices)"]
+        direction LR
+        S1["s1c1"]
+        S2["s2c1"]
+        S3["s3c1"]
+        S4["s4c1"]
+        S5["s5c2"]
+        T1["t1c1"]
+        T2["t2c2"]
+        S6["s6c2"]
+        S7["s7c2"]
+        S8["s8c2"]
+        S9["s9c1"]
+        S10["s10c1"]
+        S11["s11c2"]
+        S12["s12c2"]
+        S13["s13c2"]
+        S14["s14c2"]
+        S15["s15c2"]
+        S16["s16c1"]
+        S17["s17c1"]
+        S18["s18c2"]
+        S19["s19c2"]
+    end
+
+    subgraph NLB["🔀 Network Load Balancer (NLB - Layer 4 TCP)"]
+        LB["Load Balancer"]
+    end
+
+    subgraph K8s["☸️ Kubernetes Cluster"]
+        subgraph Pod1["🟢 Pod 1 (device-control)"]
+            WS1["WebSocket Handler"]
+            MAP1["activeSessions Map\n─────────────\ns1c1, s2c1, s3c1\ns4c1, t1c1, t2c2, s5c2"]
+            CON1["Redis Stream Consumer"]
+        end
+
+        subgraph Pod2["🟢 Pod 2 (device-control)"]
+            WS2["WebSocket Handler"]
+            MAP2["activeSessions Map\n─────────────\ns6c2, s7c2, s8c2\ns9c1, s10c1, s11c2, s12c2"]
+            CON2["Redis Stream Consumer"]
+        end
+
+        subgraph Pod3["🟢 Pod 3 (device-control)"]
+            WS3["WebSocket Handler"]
+            MAP3["activeSessions Map\n─────────────\ns13c2, s14c2, s15c2\ns16c1, s17c1, s18c2, s19c2"]
+            CON3["Redis Stream Consumer"]
+        end
+    end
+
+    subgraph RedisCluster["🔴 Redis"]
+        STREAM[("CLASSROOM_EVENTS\n(Redis Stream)")]
+    end
+
+    subgraph Producer["🟠 Class-Control Application"]
+        CC["Event Producer"]
+    end
+
+    Clients -->|"WebSocket Connections"| LB
+    LB -->|"WS"| WS1
+    LB -->|"WS"| WS2
+    LB -->|"WS"| WS3
+
+    WS1 --> MAP1
+    WS2 --> MAP2
+    WS3 --> MAP3
+
+    CC -->|"XADD classroom_events * payload"| STREAM
+
+    STREAM -->|"XREAD (all msgs)"| CON1
+    STREAM -->|"XREAD (all msgs)"| CON2
+    STREAM -->|"XREAD (all msgs)"| CON3
+
+    CON1 -->|"check studentId"| MAP1
+    CON2 -->|"check studentId"| MAP2
+    CON3 -->|"check studentId"| MAP3
+
+    style Pod1 fill:#d4edda,stroke:#28a745
+    style Pod2 fill:#d4edda,stroke:#28a745
+    style Pod3 fill:#d4edda,stroke:#28a745
+    style RedisCluster fill:#f8d7da,stroke:#dc3545
+    style Producer fill:#ffe0b2,stroke:#ff9800
+    style NLB fill:#cce5ff,stroke:#004085
+```
+
+---
+
+## 2. Sequence Diagram (Message Flow)
+
+```mermaid
+sequenceDiagram
+    title Message Flow - AUTO_JOIN Event
+
+    participant CC as 🟠 Class-Control App
+    participant Redis as 🔴 Redis Stream<br/>(CLASSROOM_EVENTS)
+    participant P1 as 🟢 Pod 1<br/>(device-control)
+    participant P2 as 🟢 Pod 2<br/>(device-control)
+    participant P3 as 🟢 Pod 3<br/>(device-control)
+    participant S1 as 🔵 Student s1<br/>(on Pod 1)
+    participant S7 as 🔵 Student s7<br/>(on Pod 2)
+
+    rect rgb(255, 243, 205)
+        Note over CC,Redis: Event Publishing
+        CC->>Redis: XADD classroom_events * payload<br/>{"eventType":"AUTO_JOIN",<br/>"studentIds":["s1","s7"],<br/>"classId":"ee78ccf3-..."}
+    end
+
+    rect rgb(204, 229, 255)
+        Note over Redis,P3: Fan-Out to All Pods
+        Redis->>P1: Deliver event (studentIds: [s1, s7])
+        Redis->>P2: Deliver event (studentIds: [s1, s7])
+        Redis->>P3: Deliver event (studentIds: [s1, s7])
+    end
+
+    rect rgb(212, 237, 218)
+        Note over P1,S1: Pod 1 Processing
+        P1->>P1: Check activeSessions for "s1"
+        Note right of P1: ✅ s1 FOUND
+        P1->>S1: Send WebSocket Message (AUTO_JOIN)
+        P1->>P1: Check activeSessions for "s7"
+        Note right of P1: ❌ s7 NOT FOUND → Skip
+    end
+
+    rect rgb(212, 237, 218)
+        Note over P2,S7: Pod 2 Processing
+        P2->>P2: Check activeSessions for "s1"
+        Note right of P2: ❌ s1 NOT FOUND → Skip
+        P2->>P2: Check activeSessions for "s7"
+        Note right of P2: ✅ s7 FOUND
+        P2->>S7: Send WebSocket Message (AUTO_JOIN)
+    end
+
+    rect rgb(248, 215, 218)
+        Note over P3: Pod 3 Processing
+        P3->>P3: Check activeSessions for "s1"
+        Note right of P3: ❌ s1 NOT FOUND → Skip
+        P3->>P3: Check activeSessions for "s7"
+        Note right of P3: ❌ s7 NOT FOUND → Skip
+    end
+```
+
+---
+
+## 3. Component Diagram (Inside a Pod)
+
+```mermaid
+graph LR
+    subgraph DeviceControlPod["🟢 Device-Control Pod"]
+        direction TB
+
+        subgraph WSLayer["WebSocket Layer"]
+            WSEndpoint["🔌 WebSocket Endpoint<br/>(accepts WS connections)"]
+        end
+
+        subgraph SessionLayer["Session Management"]
+            SessionMgr["📋 Session Manager"]
+            SessionMap[("activeSessions<br/>Map&lt;String, WebSocketSession&gt;")]
+        end
+
+        subgraph ConsumerLayer["Redis Consumer Layer"]
+            RedisConsumer["📡 Redis Stream Consumer<br/>(listens to CLASSROOM_EVENTS)"]
+        end
+
+        subgraph DispatchLayer["Dispatch Layer"]
+            Dispatcher["📤 Message Dispatcher"]
+        end
+
+        WSEndpoint -->|"onConnect()<br/>register session"| SessionMgr
+        WSEndpoint -->|"onDisconnect()<br/>remove session"| SessionMgr
+        SessionMgr --> SessionMap
+
+        RedisConsumer -->|"parsed event<br/>with studentIds[]"| Dispatcher
+        Dispatcher -->|"lookup each<br/>studentId"| SessionMap
+        Dispatcher -->|"send WS message<br/>(if session exists)"| WSEndpoint
+    end
+
+    NLB["🔀 NLB"] -->|"WS Connection"| WSEndpoint
+    Redis[("🔴 Redis Stream")] -->|"XREAD"| RedisConsumer
+
+    style DeviceControlPod fill:#d4edda,stroke:#28a745
+    style WSLayer fill:#e8f5e9,stroke:#66bb6a
+    style SessionLayer fill:#e8f5e9,stroke:#66bb6a
+    style ConsumerLayer fill:#e8f5e9,stroke:#66bb6a
+    style DispatchLayer fill:#e8f5e9,stroke:#66bb6a
+```
+
+---
+
+## 4. Activity/Flowchart Diagram (Pod Consumer Logic)
+
+```mermaid
+flowchart TD
+    A([🚀 Start]) --> B["Receive event from<br/>Redis Stream<br/>(CLASSROOM_EVENTS)"]
+    B --> C["Parse event payload"]
+    C --> D["Extract studentIds[]<br/>from event"]
+    D --> E{"More studentIds<br/>to process?"}
+
+    E -->|"Yes"| F["Get next studentId"]
+    F --> G{"studentId exists in<br/>activeSessions map?"}
+
+    G -->|"Yes ✅"| H["Get WebSocketSession<br/>from map"]
+    H --> I{"Session is open?"}
+
+    I -->|"Yes ✅"| J["✉️ Send WebSocket<br/>message to student"]
+    J --> K["✅ Message Delivered"]
+    K --> E
+
+    I -->|"No ❌"| L["Remove stale session<br/>from activeSessions"]
+    L --> M["❌ Session Closed"]
+    M --> E
+
+    G -->|"No ❌"| N["⏭️ Student not on<br/>this pod → Skip"]
+    N --> E
+
+    E -->|"No"| O["Acknowledge message<br/>in Redis Stream"]
+    O --> P([🏁 End])
+
+    style A fill:#4caf50,color:#fff
+    style P fill:#f44336,color:#fff
+    style J fill:#c8e6c9,stroke:#2e7d32
+    style K fill:#a5d6a7,stroke:#2e7d32
+    style L fill:#ffcdd2,stroke:#c62828
+    style M fill:#ef9a9a,stroke:#c62828
+    style N fill:#fff9c4,stroke:#f9a825
+```
+
+---
+
+## 5. Deployment Diagram
+
+```mermaid
+graph TB
+    subgraph Internet["🌐 Internet"]
+        Users["👨‍🎓 Students & Teachers"]
+    end
+
+    subgraph AWS["☁️ AWS / Cloud"]
+        subgraph NLBLayer["🔀 NLB (Layer 4 TCP)"]
+            NLB["Network Load Balancer"]
+        end
+
+        subgraph K8s["☸️ Kubernetes Cluster"]
+            subgraph Pod1["Pod 1"]
+                DC1["device-control<br/>(Java/Spring)"]
+            end
+            subgraph Pod2["Pod 2"]
+                DC2["device-control<br/>(Java/Spring)"]
+            end
+            subgraph Pod3["Pod 3"]
+                DC3["device-control<br/>(Java/Spring)"]
+            end
+            subgraph CCPod["Class-Control Pod"]
+                CC["class-control<br/>(Java/Spring)"]
+            end
+        end
+
+        subgraph RedisNode["🔴 Redis Cluster"]
+            STREAM[("CLASSROOM_EVENTS<br/>(Stream)")]
+        end
+    end
+
+    Users -->|"WSS (443)"| NLB
+    NLB -->|"WS"| DC1
+    NLB -->|"WS"| DC2
+    NLB -->|"WS"| DC3
+
+    CC -->|"XADD"| STREAM
+    STREAM -->|"XREAD"| DC1
+    STREAM -->|"XREAD"| DC2
+    STREAM -->|"XREAD"| DC3
+
+    style Pod1 fill:#d4edda,stroke:#28a745
+    style Pod2 fill:#d4edda,stroke:#28a745
+    style Pod3 fill:#d4edda,stroke:#28a745
+    style CCPod fill:#ffe0b2,stroke:#ff9800
+    style RedisNode fill:#f8d7da,stroke:#dc3545
+    style NLBLayer fill:#cce5ff,stroke:#004085
+```
+
+---
+
+## 6. Class Distribution (Pie Charts)
+
+```mermaid
+pie title Class c1 - Pod Distribution
+    "Pod 1 (s1,s2,s3,s4,t1)" : 5
+    "Pod 2 (s9,s10)" : 2
+    "Pod 3 (s16,s17)" : 2
+```
+
+```mermaid
+pie title Class c2 - Pod Distribution
+    "Pod 1 (s5,t2)" : 2
+    "Pod 2 (s6,s7,s8,s11,s12)" : 5
+    "Pod 3 (s13,s14,s15,s18,s19)" : 5
+```
+
+---
+
+## 7. State Diagram (WebSocket Session Lifecycle)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Connecting : Client initiates WS
+
+    Connecting --> Connected : WS handshake success
+    Connecting --> Failed : Handshake failed
+
+    Connected --> Registered : Added to activeSessions map
+    Registered --> ReceivingMessages : Redis event matches studentId
+
+    ReceivingMessages --> ReceivingMessages : More events arrive
+    ReceivingMessages --> Disconnecting : Client disconnects
+
+    Registered --> Disconnecting : Client disconnects
+    Registered --> Stale : Connection lost silently
+
+    Stale --> Removed : Detected during dispatch
+    Disconnecting --> Removed : onDisconnect() fired
+    Removed --> [*] : Session cleaned up
+
+    Failed --> [*]
+```
+
+---
+
+## 8. Redis Stream Event Structure
+
+```mermaid
+classDiagram
+    class ClassroomEvent {
+        +String eventType
+        +String senderId
+        +List~String~ studentIds
+        +String classId
+        +String participationCode
+    }
+
+    class RedisStream {
+        +String streamName = "CLASSROOM_EVENTS"
+        +xadd(payload) messageId
+        +xread(count, block) List~Message~
+        +xreadgroup(group, consumer) List~Message~
+    }
+
+    class DeviceControlPod {
+        +Map~String_WebSocketSession~ activeSessions
+        +onConnect(session) void
+        +onDisconnect(sessionId) void
+        +onStreamEvent(event) void
+        +dispatchToLocal(studentId, message) void
+    }
+
+    class ClassControlApp {
+        +publishEvent(event) void
+    }
+
+    ClassControlApp --> RedisStream : XADD
+    RedisStream --> DeviceControlPod : XREAD
+    DeviceControlPod --> ClassroomEvent : parses
+```
+
+---
+
+## How to Render
+
+| Tool | URL |
+|------|-----|
+| **Mermaid Live Editor** | [mermaid.live](https://mermaid.live) |
+| **GitHub** | Natively supported in `.md` files |
+| **VS Code** | Markdown Preview Mermaid Support extension |
+| **Notion** | Use `/code` block with `mermaid` language |
+| **Obsidian** | Natively supported |
+
+> Copy any code block (between ` ```mermaid ` and ` ``` `) into [mermaid.live](https://mermaid.live) to instantly visualize.
