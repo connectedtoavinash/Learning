@@ -1,0 +1,367 @@
+# PlantUML Diagrams
+
+## 1. System Architecture Diagram
+
+```plantuml
+@startuml
+title Classroom Real-Time Messaging - System Architecture
+
+skinparam backgroundColor #FEFEFE
+skinparam componentStyle rectangle
+skinparam defaultFontSize 12
+
+cloud "Clients (Browsers/Devices)" as clients {
+    actor "s1c1" as s1
+    actor "s2c1" as s2
+    actor "s3c1" as s3
+    actor "s4c1" as s4
+    actor "s5c2" as s5
+    actor "t1c1" as t1
+    actor "t2c2" as t2
+    actor "s6c2" as s6
+    actor "s7c2" as s7
+    actor "s8c2" as s8
+    actor "s9c1" as s9
+    actor "s10c1" as s10
+    actor "s11c2" as s11
+    actor "s12c2" as s12
+    actor "s13c2" as s13
+    actor "s14c2" as s14
+    actor "s15c2" as s15
+    actor "s16c1" as s16
+    actor "s17c1" as s17
+    actor "s18c2" as s18
+    actor "s19c2" as s19
+}
+
+rectangle "Network Load Balancer (NLB)" as NLB #LightBlue {
+}
+
+package "Kubernetes Cluster" {
+
+    node "Pod 1 (device-control)" as pod1 #LightGreen {
+        component "WebSocket Handler" as ws1
+        database "activeSessions\nMap<String, WebSocketSession>" as map1
+        note right of map1
+            s1c1, s2c1, s3c1,
+            s4c1, t1c1, t2c2, s5c2
+        end note
+        component "Redis Stream Consumer" as consumer1
+    }
+
+    node "Pod 2 (device-control)" as pod2 #LightGreen {
+        component "WebSocket Handler" as ws2
+        database "activeSessions\nMap<String, WebSocketSession>" as map2
+        note right of map2
+            s6c2, s7c2, s8c2,
+            s9c1, s10c1, s11c2, s12c2
+        end note
+        component "Redis Stream Consumer" as consumer2
+    }
+
+    node "Pod 3 (device-control)" as pod3 #LightGreen {
+        component "WebSocket Handler" as ws3
+        database "activeSessions\nMap<String, WebSocketSession>" as map3
+        note right of map3
+            s13c2, s14c2, s15c2,
+            s16c1, s17c1, s18c2, s19c2
+        end note
+        component "Redis Stream Consumer" as consumer3
+    }
+}
+
+database "Redis" as redis #Salmon {
+    collections "Stream:\nCLASSROOM_EVENTS" as stream
+}
+
+rectangle "Class-Control Application\n(Event Producer)" as classcontrol #Orange {
+}
+
+' Client to NLB
+clients -down-> NLB : WebSocket\nConnections
+
+' NLB to Pods
+NLB -down-> ws1 : WS
+NLB -down-> ws2 : WS
+NLB -down-> ws3 : WS
+
+' WS to Maps
+ws1 -down-> map1 : store session
+ws2 -down-> map2 : store session
+ws3 -down-> map3 : store session
+
+' Class Control to Redis
+classcontrol -right-> stream : XADD\nclassroom_events * payload
+
+' Redis to Consumers (fan-out)
+stream -up-> consumer1 : XREAD\n(all messages)
+stream -up-> consumer2 : XREAD\n(all messages)
+stream -up-> consumer3 : XREAD\n(all messages)
+
+' Consumers check local maps
+consumer1 -up-> map1 : check studentId\nin activeSessions
+consumer2 -up-> map2 : check studentId\nin activeSessions
+consumer3 -up-> map3 : check studentId\nin activeSessions
+
+@enduml
+```
+
+---
+
+## 2. Sequence Diagram (Message Flow)
+
+```plantuml
+@startuml
+title Message Flow - AUTO_JOIN Event
+
+skinparam backgroundColor #FEFEFE
+skinparam sequenceArrowThickness 2
+skinparam sequenceMessageAlign center
+
+participant "Class-Control\nApplication" as CC #Orange
+participant "Redis Stream\n(CLASSROOM_EVENTS)" as Redis #Salmon
+participant "Pod 1\n(device-control)" as P1 #LightGreen
+participant "Pod 2\n(device-control)" as P2 #LightGreen
+participant "Pod 3\n(device-control)" as P3 #LightGreen
+participant "Student s1\n(on Pod 1)" as S1 #LightBlue
+participant "Student s7\n(on Pod 2)" as S7 #LightBlue
+
+== Event Publishing ==
+
+CC -> Redis : XADD classroom_events * payload\n{\n  "eventType": "AUTO_JOIN",\n  "studentIds": ["s1", "s7"],\n  "classId": "ee78ccf3-..."\n}
+
+== Fan-Out to All Pods ==
+
+Redis -> P1 : Deliver event\n(studentIds: [s1, s7])
+Redis -> P2 : Deliver event\n(studentIds: [s1, s7])
+Redis -> P3 : Deliver event\n(studentIds: [s1, s7])
+
+== Pod 1 Processing ==
+
+P1 -> P1 : Check activeSessions\nfor "s1"
+note right of P1 : s1 FOUND ✅
+P1 -> S1 : Send WebSocket\nMessage (AUTO_JOIN)
+
+P1 -> P1 : Check activeSessions\nfor "s7"
+note right of P1 : s7 NOT FOUND ❌\nSkip
+
+== Pod 2 Processing ==
+
+P2 -> P2 : Check activeSessions\nfor "s1"
+note right of P2 : s1 NOT FOUND ❌\nSkip
+
+P2 -> P2 : Check activeSessions\nfor "s7"
+note right of P2 : s7 FOUND ✅
+P2 -> S7 : Send WebSocket\nMessage (AUTO_JOIN)
+
+== Pod 3 Processing ==
+
+P3 -> P3 : Check activeSessions\nfor "s1"
+note right of P3 : s1 NOT FOUND ❌\nSkip
+
+P3 -> P3 : Check activeSessions\nfor "s7"
+note right of P3 : s7 NOT FOUND ❌\nSkip
+
+@enduml
+```
+
+---
+
+## 3. Component Diagram
+
+```plantuml
+@startuml
+title Component Diagram - Device Control Pod
+
+skinparam backgroundColor #FEFEFE
+skinparam componentStyle rectangle
+
+package "Device-Control Pod" as pod #LightGreen {
+
+    component "WebSocket\nEndpoint" as wsEndpoint {
+        portin "WS Connection\n(from NLB)" as wsIn
+    }
+
+    component "Session\nManager" as sessionMgr {
+        database "activeSessions\nMap<String,\nWebSocketSession>" as sessMap
+    }
+
+    component "Redis Stream\nConsumer" as redisConsumer {
+        portin "XREAD from\nCLASSROOM_EVENTS" as redisIn
+    }
+
+    component "Message\nDispatcher" as dispatcher
+
+    wsEndpoint -down-> sessionMgr : onConnect()\nregister session
+    wsEndpoint -down-> sessionMgr : onDisconnect()\nremove session
+
+    redisConsumer -right-> dispatcher : parsed event\nwith studentIds[]
+
+    dispatcher -up-> sessionMgr : lookup each\nstudentId
+
+    dispatcher -left-> wsEndpoint : send WS message\n(if session exists)
+}
+
+@enduml
+```
+
+---
+
+## 4. Activity Diagram (Pod Consumer Logic)
+
+```plantuml
+@startuml
+title Pod Consumer - Event Processing Logic
+
+skinparam backgroundColor #FEFEFE
+
+start
+
+:Receive event from\nRedis Stream\n(CLASSROOM_EVENTS);
+
+:Parse event payload;
+
+:Extract **studentIds[]**\nfrom event;
+
+while (More studentIds\nto process?) is (Yes)
+    :Get next **studentId**;
+
+    if (studentId exists in\n**activeSessions** map?) then (Yes)
+        :Get **WebSocketSession**\nfrom map;
+
+        if (Session is **open**?) then (Yes)
+            :Send WebSocket\nmessage to student;
+            #LightGreen :Message Delivered ✅;
+        else (No)
+            :Remove stale session\nfrom activeSessions;
+            #Salmon :Session Closed ❌;
+        endif
+
+    else (No)
+        #LightYellow :Student not on\nthis pod → Skip;
+    endif
+
+endwhile (No)
+
+:Acknowledge message\nin Redis Stream;
+
+stop
+
+@enduml
+```
+
+---
+
+## 5. Deployment Diagram
+
+```plantuml
+@startuml
+title Deployment Diagram
+
+skinparam backgroundColor #FEFEFE
+
+cloud "Internet" as internet {
+    actor "Students &\nTeachers" as users
+}
+
+node "AWS / Cloud" {
+
+    rectangle "NLB\n(Layer 4 TCP)" as nlb #LightBlue
+
+    node "Kubernetes Cluster" as k8s {
+
+        node "Pod 1" as p1 #LightGreen {
+            artifact "device-control\n(Java/Spring)" as dc1
+        }
+
+        node "Pod 2" as p2 #LightGreen {
+            artifact "device-control\n(Java/Spring)" as dc2
+        }
+
+        node "Pod 3" as p3 #LightGreen {
+            artifact "device-control\n(Java/Spring)" as dc3
+        }
+
+        node "Class-Control Pod" as ccp #Orange {
+            artifact "class-control\n(Java/Spring)" as cc
+        }
+    }
+
+    node "Redis Cluster" as redisNode #Salmon {
+        database "Redis" as redis {
+            collections "CLASSROOM_EVENTS\n(Stream)" as stream
+        }
+    }
+}
+
+users -down-> nlb : WSS (443)
+nlb -down-> dc1 : WS
+nlb -down-> dc2 : WS
+nlb -down-> dc3 : WS
+
+cc -right-> stream : XADD
+
+stream -up-> dc1 : XREAD
+stream -up-> dc2 : XREAD
+stream -up-> dc3 : XREAD
+
+@enduml
+```
+
+---
+
+## 6. Class Distribution State Diagram
+
+```plantuml
+@startuml
+title Session Distribution Across Pods
+
+skinparam backgroundColor #FEFEFE
+
+map "Pod 1 - activeSessions" as pod1 #LightGreen {
+    s1 => Class c1 (Student)
+    s2 => Class c1 (Student)
+    s3 => Class c1 (Student)
+    s4 => Class c1 (Student)
+    s5 => Class c2 (Student)
+    t1 => Class c1 (Teacher)
+    t2 => Class c2 (Teacher)
+}
+
+map "Pod 2 - activeSessions" as pod2 #LightYellow {
+    s6  => Class c2 (Student)
+    s7  => Class c2 (Student)
+    s8  => Class c2 (Student)
+    s9  => Class c1 (Student)
+    s10 => Class c1 (Student)
+    s11 => Class c2 (Student)
+    s12 => Class c2 (Student)
+}
+
+map "Pod 3 - activeSessions" as pod3 #LightCyan {
+    s13 => Class c2 (Student)
+    s14 => Class c2 (Student)
+    s15 => Class c2 (Student)
+    s16 => Class c1 (Student)
+    s17 => Class c1 (Student)
+    s18 => Class c2 (Student)
+    s19 => Class c2 (Student)
+}
+
+@enduml
+```
+
+---
+
+## How to Render
+
+You can render these diagrams using:
+
+| Tool | URL |
+|------|-----|
+| **PlantUML Online** | [www.plantuml.com/plantuml](http://www.plantuml.com/plantuml) |
+| **VS Code Extension** | PlantUML plugin by jebbs |
+| **IntelliJ Plugin** | PlantUML Integration |
+| **CLI** | `java -jar plantuml.jar diagram.puml` |
+
+Copy any `@startuml ... @enduml` block into the tool to generate the visual diagram.
